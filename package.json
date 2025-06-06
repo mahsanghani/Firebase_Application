@@ -1,12 +1,16 @@
 {
-  "name": "fast-internship-handler",
+  "name": "internship-application-handler",
   "version": "1.0.0",
+  "description": "Cloud Function to handle internship application submissions",
   "main": "index.js",
+  "scripts": {
+    "start": "functions-framework --target=submitInternshipApplication"
+  },
   "dependencies": {
-    "@google-cloud/functions-framework": "^3.0.0",
-    "@google-cloud/firestore": "^7.0.0",
-    "@google-cloud/storage": "^7.0.0",
-    "multer": "^1.4.5-lts.1"
+    "@google-cloud/functions-framework": "^3.3.0",
+    "@google-cloud/firestore": "^7.1.0",
+    "@google-cloud/storage": "^7.7.0",
+    "multer": "1.4.5-lts.1"
   },
   "engines": {
     "node": "18"
