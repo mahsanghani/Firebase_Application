@@ -10,173 +10,6 @@ const BUCKET_NAME = 'internship-applications-files';
 // Validation rules
 const REQUIRED_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'university', 'major', 'graduationDate', 'position', 'availability', 'motivation', 'terms'];
 
-// Raw multipart parser - no external dependencies
-function parseMultipartData(buffer, boundary) {
-  const parts = [];
-  const boundaryBuffer = Buffer.from('--' + boundary);
-  const endBoundaryBuffer = Buffer.from('--' + boundary + '--');
-  
-  let offset = 0;
-  
-  // Find first boundary
-  const firstBoundaryIndex = buffer.indexOf(boundaryBuffer, offset);
-  if (firstBoundaryIndex === -1) {
-    throw new Error('No multipart boundary found');
-  }
-  
-  offset = firstBoundaryIndex + boundaryBuffer.length;
-  
-  while (offset < buffer.length) {
-    // Skip CRLF after boundary
-    if (buffer[offset] === 0x0D && buffer[offset + 1] === 0x0A) {
-      offset += 2;
-    }
-    
-    // Find next boundary or end
-    const nextBoundaryIndex = buffer.indexOf(boundaryBuffer, offset);
-    const endBoundaryIndex = buffer.indexOf(endBoundaryBuffer, offset);
-    
-    let partEnd;
-    if (endBoundaryIndex !== -1 && (nextBoundaryIndex === -1 || endBoundaryIndex < nextBoundaryIndex)) {
-      partEnd = endBoundaryIndex;
-    } else if (nextBoundaryIndex !== -1) {
-      partEnd = nextBoundaryIndex;
-    } else {
-      break; // No more parts
-    }
-    
-    // Extract part data
-    const partBuffer = buffer.slice(offset, partEnd);
-    
-    // Find headers/body separator (\r\n\r\n)
-    const headerEndIndex = partBuffer.indexOf(Buffer.from('\r\n\r\n'));
-    if (headerEndIndex === -1) {
-      offset = partEnd + boundaryBuffer.length;
-      continue;
-    }
-    
-    const headerBuffer = partBuffer.slice(0, headerEndIndex);
-    const bodyBuffer = partBuffer.slice(headerEndIndex + 4);
-    
-    // Remove trailing CRLF from body
-    let bodyEnd = bodyBuffer.length;
-    while (bodyEnd > 0 && (bodyBuffer[bodyEnd - 1] === 0x0A || bodyBuffer[bodyEnd - 1] === 0x0D)) {
-      bodyEnd--;
-    }
-    const cleanBodyBuffer = bodyBuffer.slice(0, bodyEnd);
-    
-    // Parse headers
-    const headers = headerBuffer.toString().split('\r\n');
-    const part = { headers: {}, body: cleanBodyBuffer };
-    
-    for (const header of headers) {
-      const colonIndex = header.indexOf(':');
-      if (colonIndex > 0) {
-        const name = header.slice(0, colonIndex).toLowerCase().trim();
-        const value = header.slice(colonIndex + 1).trim();
-        part.headers[name] = value;
-      }
-    }
-    
-    // Parse Content-Disposition
-    const disposition = part.headers['content-disposition'];
-    if (disposition) {
-      const nameMatch = disposition.match(/name="([^"]+)"/);
-      const filenameMatch = disposition.match(/filename="([^"]+)"/);
-      
-      if (nameMatch) {
-        part.name = nameMatch[1];
-        
-        if (filenameMatch && filenameMatch[1]) {
-          // It's a file
-          part.filename = filenameMatch[1];
-          part.contentType = part.headers['content-type'] || 'application/octet-stream';
-          part.isFile = true;
-        } else {
-          // It's a form field
-          part.value = cleanBodyBuffer.toString('utf8');
-          part.isFile = false;
-        }
-      }
-    }
-    
-    parts.push(part);
-    offset = partEnd + boundaryBuffer.length;
-  }
-  
-  return parts;
-}
-
-// Process raw multipart request
-function parseRawMultipart(req) {
-  return new Promise((resolve, reject) => {
-    const contentType = req.headers['content-type'] || '';
-    const boundaryMatch = contentType.match(/boundary=([^;]+)/);
-    
-    if (!boundaryMatch) {
-      reject(new Error('No boundary found in Content-Type header'));
-      return;
-    }
-    
-    const boundary = boundaryMatch[1].replace(/"/g, '');
-    console.log('Parsing multipart with boundary:', boundary);
-    
-    const chunks = [];
-    let totalLength = 0;
-    
-    req.on('data', (chunk) => {
-      chunks.push(chunk);
-      totalLength += chunk.length;
-      
-      // Prevent memory issues
-      if (totalLength > 50 * 1024 * 1024) { // 50MB limit
-        reject(new Error('Request too large'));
-      }
-    });
-    
-    req.on('end', () => {
-      try {
-        console.log(`Received ${totalLength} bytes of multipart data`);
-        const buffer = Buffer.concat(chunks);
-        const parts = parseMultipartData(buffer, boundary);
-        
-        console.log(`Parsed ${parts.length} multipart parts`);
-        
-        const fields = {};
-        const files = [];
-        
-        for (const part of parts) {
-          if (part.name) {
-            if (part.isFile && part.filename) {
-              files.push({
-                fieldname: part.name,
-                filename: part.filename,
-                buffer: part.body,
-                mimetype: part.contentType,
-                size: part.body.length
-              });
-              console.log(`File: ${part.filename} (${part.body.length} bytes)`);
-            } else if (!part.isFile) {
-              fields[part.name] = part.value;
-              console.log(`Field: ${part.name} = ${part.value.substring(0, 50)}${part.value.length > 50 ? '...' : ''}`);
-            }
-          }
-        }
-        
-        resolve({ fields, files });
-      } catch (parseError) {
-        console.error('Parse error:', parseError);
-        reject(parseError);
-      }
-    });
-    
-    req.on('error', (error) => {
-      console.error('Request error:', error);
-      reject(error);
-    });
-  });
-}
-
 functions.http('submitInternshipApplication', async (req, res) => {
   const startTime = Date.now();
   
@@ -202,41 +35,21 @@ functions.http('submitInternshipApplication', async (req, res) => {
     console.log('Content-Length:', req.headers['content-length']);
 
     let applicationData = {};
-    let files = [];
     let processingMethod = 'unknown';
-
-    // Detect content type and handle accordingly
     const contentType = req.headers['content-type'] || '';
     
+    // ONLY handle JSON - reject multipart with helpful message
     if (contentType.includes('multipart/form-data')) {
-      processingMethod = 'multipart-raw';
-      console.log('Using raw multipart parser...');
+      console.log('Multipart detected - redirecting to JSON approach');
       
-      try {
-        // Use raw multipart parser with timeout
-        const result = await Promise.race([
-          parseRawMultipart(req),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Multipart parsing timeout')), 15000)
-          )
-        ]);
-        
-        applicationData = result.fields;
-        files = result.files;
-        
-        console.log(`Raw multipart parsing successful: ${Object.keys(applicationData).length} fields, ${files.length} files`);
-        
-      } catch (multipartError) {
-        console.error('Raw multipart parsing failed:', multipartError.message);
-        
-        return res.status(400).json({
-          success: false,
-          error: 'Multipart parsing error',
-          message: multipartError.message,
-          suggestion: 'Try submitting as JSON without files, or check file sizes and formats',
-          duration: Date.now() - startTime
-        });
-      }
+      return res.status(400).json({
+        success: false,
+        error: 'Multipart not supported',
+        message: 'Please submit form data as JSON. File uploads available separately.',
+        instruction: 'Use Content-Type: application/json and send form fields in JSON format',
+        fileUploadInfo: 'Files can be uploaded after form submission using the uploadApplicationFiles endpoint',
+        duration: Date.now() - startTime
+      });
       
     } else if (contentType.includes('application/json')) {
       processingMethod = 'json';
@@ -244,14 +57,13 @@ functions.http('submitInternshipApplication', async (req, res) => {
       applicationData = req.body || {};
       
     } else {
-      processingMethod = 'other';
-      console.log('Processing other data format');
+      processingMethod = 'urlencoded';
+      console.log('Processing URL-encoded data');
       applicationData = req.body || {};
     }
 
     console.log(`Processing method: ${processingMethod}`);
     console.log('Fields received:', Object.keys(applicationData));
-    console.log('Files received:', files.length);
 
     // Validate required fields
     const missing = REQUIRED_FIELDS.filter(field => {
@@ -304,97 +116,36 @@ functions.http('submitInternshipApplication', async (req, res) => {
         goals: applicationData.goals || '',
         additional: applicationData.additionalInfo || ''
       },
-      files: [],
+      files: [], // Will be added via separate endpoint
       meta: {
         submitted: new Date(),
         terms: true,
         newsletter: applicationData.newsletter === 'true' || applicationData.newsletter === true,
         ip: req.ip || 'unknown',
         agent: req.get('User-Agent')?.substr(0, 100) || 'unknown',
-        processingMethod,
-        fileCount: files.length
+        processingMethod
       }
     };
 
-    // Respond immediately
+    // Respond immediately - always fast
     const responseTime = Date.now() - startTime;
     console.log(`Sending response after ${responseTime}ms`);
     
     res.status(200).json({
       success: true,
       applicationId,
-      message: files.length > 0 ? 'Application received, processing files...' : 'Application submitted successfully',
-      filesReceived: files.length,
-      fileNames: files.map(f => f.filename),
-      processingMethod,
+      message: 'Application submitted successfully',
+      note: 'Form data saved. Upload files separately if needed.',
+      fileUploadEndpoint: 'uploadApplicationFiles',
       duration: responseTime
     });
 
-    // Background processing
-    console.log('Starting background file processing...');
-    
+    // Save to database in background
     try {
-      const uploadedFiles = [];
-      
-      // Process files if any
-      if (files.length > 0) {
-        console.log(`Processing ${files.length} files in background...`);
-        
-        for (const file of files) {
-          try {
-            const destination = `applications/${applicationId}/${file.filename}`;
-            const gcsFile = storage.bucket(BUCKET_NAME).file(destination);
-            
-            await gcsFile.save(file.buffer, {
-              metadata: {
-                contentType: file.mimetype,
-              },
-              resumable: false
-            });
-            
-            uploadedFiles.push({
-              fieldname: file.fieldname,
-              filename: file.filename,
-              gcsPath: `gs://${BUCKET_NAME}/${destination}`,
-              publicUrl: `https://storage.googleapis.com/${BUCKET_NAME}/${destination}`,
-              size: file.size
-            });
-            
-            console.log(`Uploaded: ${file.filename} (${file.size} bytes)`);
-            
-          } catch (uploadError) {
-            console.error(`Upload failed for ${file.filename}:`, uploadError);
-          }
-        }
-        
-        console.log(`File processing complete: ${uploadedFiles.length}/${files.length} successful`);
-      }
-
-      // Update document with files
-      doc.files = uploadedFiles;
-      
-      // Save to Firestore
       await firestore.collection('applications').doc(applicationId).set(doc);
       console.log(`Database save completed for ${applicationId}`);
-      
-    } catch (backgroundError) {
-      console.error('Background processing error:', backgroundError);
-      
-      // Fallback save without files
-      try {
-        await firestore.collection('applications').doc(applicationId).set({
-          ...doc,
-          files: [],
-          meta: {
-            ...doc.meta,
-            processingError: backgroundError.message,
-            fallbackSave: true
-          }
-        });
-        console.log(`Fallback save completed for ${applicationId}`);
-      } catch (fallbackError) {
-        console.error('Fallback save failed:', fallbackError);
-      }
+    } catch (dbError) {
+      console.error('Database save error:', dbError);
     }
 
   } catch (error) {
@@ -406,6 +157,114 @@ functions.http('submitInternshipApplication', async (req, res) => {
       error: 'Processing failed',
       message: error.message,
       duration
+    });
+  }
+});
+
+// Separate file upload function
+functions.http('uploadApplicationFiles', async (req, res) => {
+  // CORS
+  res.set({
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  });
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, error: 'Method not allowed' });
+  }
+
+  try {
+    console.log('File upload request received');
+    
+    // Expect JSON with base64 encoded files
+    const { applicationId, files } = req.body;
+    
+    if (!applicationId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing application ID'
+      });
+    }
+
+    if (!files || !Array.isArray(files) || files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No files provided',
+        expectedFormat: 'Array of {filename, content, contentType, fieldname} objects with base64 content'
+      });
+    }
+
+    console.log(`Processing ${files.length} files for application ${applicationId}`);
+
+    const uploadedFiles = [];
+    
+    for (const fileData of files) {
+      try {
+        const { filename, content, contentType, fieldname } = fileData;
+        
+        if (!filename || !content) {
+          console.warn('Skipping invalid file data:', { filename, hasContent: !!content });
+          continue;
+        }
+
+        // Decode base64 content
+        const buffer = Buffer.from(content, 'base64');
+        
+        // Upload to GCS
+        const destination = `applications/${applicationId}/${filename}`;
+        const gcsFile = storage.bucket(BUCKET_NAME).file(destination);
+        
+        await gcsFile.save(buffer, {
+          metadata: {
+            contentType: contentType || 'application/octet-stream',
+          },
+        });
+        
+        uploadedFiles.push({
+          fieldname: fieldname || 'file',
+          filename,
+          gcsPath: `gs://${BUCKET_NAME}/${destination}`,
+          publicUrl: `https://storage.googleapis.com/${BUCKET_NAME}/${destination}`,
+          size: buffer.length
+        });
+        
+        console.log(`Uploaded: ${filename} (${buffer.length} bytes)`);
+        
+      } catch (uploadError) {
+        console.error(`Upload failed for file:`, uploadError);
+      }
+    }
+
+    // Update application in Firestore
+    try {
+      const docRef = firestore.collection('applications').doc(applicationId);
+      await docRef.update({
+        files: uploadedFiles,
+        'meta.filesUpdated': new Date()
+      });
+      console.log(`Updated application ${applicationId} with ${uploadedFiles.length} files`);
+    } catch (updateError) {
+      console.error('Failed to update application:', updateError);
+    }
+
+    res.status(200).json({
+      success: true,
+      applicationId,
+      filesUploaded: uploadedFiles.length,
+      files: uploadedFiles.map(f => ({ name: f.filename, size: f.size }))
+    });
+
+  } catch (error) {
+    console.error('File upload error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Upload failed',
+      message: error.message
     });
   }
 });
