@@ -11,51 +11,73 @@ const BUCKET_NAME = 'internship-applications-files';
 // Validation rules
 const REQUIRED_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'university', 'major', 'graduationDate', 'position', 'availability', 'motivation', 'terms'];
 
-// Configure multer with better error handling
+// Configure multer with more permissive settings
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB
-    files: 5,
-    fieldSize: 1024 * 1024, // 1MB for form fields
-    parts: 20 // Max form parts
+    files: 10, // Increased file limit
+    fieldSize: 2 * 1024 * 1024, // 2MB for form fields
+    fieldNameSize: 100, // Field name size
+    fields: 50, // Max number of fields
+    parts: 100 // Max form parts
   },
   fileFilter: (req, file, cb) => {
-    console.log('Processing file:', file.originalname, file.mimetype);
+    console.log('File filter - Processing file:', file.originalname, file.mimetype, file.fieldname);
+    // Accept all files
     cb(null, true);
   }
 });
 
-const uploadFields = upload.fields([
-  { name: 'resume', maxCount: 1 },
-  { name: 'coverLetter', maxCount: 1 },
-  { name: 'portfolio', maxCount: 3 }
-]);
+// Use .any() instead of .fields() to be more permissive
+const uploadAny = upload.any();
 
-// Promisified multer wrapper with better error handling
+// Better multer wrapper with detailed logging
 function handleMultipart(req, res) {
   return new Promise((resolve, reject) => {
-    uploadFields(req, res, (err) => {
+    console.log('Starting multer processing...');
+    console.log('Request headers:', {
+      'content-type': req.headers['content-type'],
+      'content-length': req.headers['content-length']
+    });
+
+    uploadAny(req, res, (err) => {
       if (err) {
         console.error('Multer error details:', {
           message: err.message,
           code: err.code,
           field: err.field,
+          storageErrors: err.storageErrors,
           stack: err.stack
         });
         
-        // Handle specific multer errors
+        // More specific error handling
         if (err.code === 'LIMIT_FILE_SIZE') {
-          reject(new Error('File too large (max 10MB)'));
+          reject(new Error('File too large (max 10MB per file)'));
         } else if (err.code === 'LIMIT_FILE_COUNT') {
-          reject(new Error('Too many files'));
-        } else if (err.message.includes('Unexpected end of form')) {
-          reject(new Error('Form data incomplete - try refreshing and submitting again'));
+          reject(new Error('Too many files (max 10 files)'));
+        } else if (err.code === 'LIMIT_FIELD_COUNT') {
+          reject(new Error('Too many form fields'));
+        } else if (err.code === 'LIMIT_PART_COUNT') {
+          reject(new Error('Form too complex'));
+        } else if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+          reject(new Error('Unexpected file field'));
+        } else if (err.message && err.message.includes('Unexpected end of form')) {
+          reject(new Error('Form data corrupted - please try again'));
+        } else if (err.message && err.message.includes('Part terminated early')) {
+          reject(new Error('File upload interrupted - please try again'));
         } else {
-          reject(new Error(`File upload error: ${err.message}`));
+          reject(new Error(`Upload error: ${err.message || 'Unknown multer error'}`));
         }
       } else {
-        console.log('Multer processing successful');
+        console.log('Multer processing completed successfully');
+        console.log('Form fields received:', Object.keys(req.body || {}));
+        console.log('Files received:', req.files ? req.files.length : 0);
+        if (req.files) {
+          req.files.forEach((file, index) => {
+            console.log(`File ${index + 1}: ${file.originalname} (${file.size} bytes, ${file.mimetype})`);
+          });
+        }
         resolve();
       }
     });
@@ -85,6 +107,7 @@ functions.http('submitInternshipApplication', async (req, res) => {
     console.log('Processing request...');
     console.log('Content-Type:', req.headers['content-type']);
     console.log('Content-Length:', req.headers['content-length']);
+    console.log('User-Agent:', req.headers['user-agent']);
 
     let applicationData = {};
     let files = [];
@@ -98,44 +121,47 @@ functions.http('submitInternshipApplication', async (req, res) => {
       console.log('Attempting multipart processing...');
       
       try {
-        // Try multipart processing with timeout
+        // Process multipart data with timeout and better error handling
         await Promise.race([
           handleMultipart(req, res),
           new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Multipart processing timeout')), 5000)
+            setTimeout(() => reject(new Error('Multipart processing timeout (10s)')), 10000)
           )
         ]);
         
+        // Extract form data
         applicationData = req.body || {};
-        console.log('Multipart fields received:', Object.keys(applicationData));
+        console.log('Multipart form data:', Object.keys(applicationData));
         
-        // Extract files
-        if (req.files) {
-          console.log('Files detected:', Object.keys(req.files));
-          for (const [fieldName, fileList] of Object.entries(req.files)) {
-            for (const file of fileList) {
-              files.push({
-                fieldname: fieldName,
-                filename: file.originalname,
-                buffer: file.buffer,
-                mimetype: file.mimetype,
-                size: file.size
-              });
-            }
-          }
+        // Extract files using multer's .any() approach
+        if (req.files && Array.isArray(req.files)) {
+          console.log(`Processing ${req.files.length} uploaded files`);
+          
+          files = req.files.map(file => ({
+            fieldname: file.fieldname,
+            filename: file.originalname,
+            buffer: file.buffer,
+            mimetype: file.mimetype,
+            size: file.size
+          }));
+          
+          console.log('Files processed:', files.map(f => `${f.filename} (${f.size} bytes)`));
         }
         
         console.log(`Multipart processing successful: ${Object.keys(applicationData).length} fields, ${files.length} files`);
         
       } catch (multipartError) {
         console.error('Multipart processing failed:', multipartError.message);
+        console.error('Error stack:', multipartError.stack);
         
-        // Fallback: ask client to retry with JSON
+        // Return detailed error for debugging
         return res.status(400).json({
           success: false,
           error: 'Multipart form error',
           message: multipartError.message,
-          suggestion: 'Please try submitting without files first, then upload files separately',
+          suggestion: 'Try reducing file size or number of files, or submit without files',
+          contentType: contentType,
+          contentLength: req.headers['content-length'],
           duration: Date.now() - startTime
         });
       }
@@ -145,14 +171,22 @@ functions.http('submitInternshipApplication', async (req, res) => {
       console.log('Processing JSON data');
       applicationData = req.body || {};
       
-    } else {
+    } else if (contentType.includes('application/x-www-form-urlencoded')) {
       processingMethod = 'urlencoded';
       console.log('Processing URL-encoded data');
+      applicationData = req.body || {};
+      
+    } else {
+      console.log('Unknown content type, treating as JSON');
+      processingMethod = 'unknown';
       applicationData = req.body || {};
     }
 
     console.log(`Processing method: ${processingMethod}`);
     console.log('Final data - Fields:', Object.keys(applicationData).length, 'Files:', files.length);
+
+    // Debug: log all received field names
+    console.log('Received field names:', Object.keys(applicationData));
 
     // Validate required fields
     const missing = REQUIRED_FIELDS.filter(field => {
@@ -161,11 +195,13 @@ functions.http('submitInternshipApplication', async (req, res) => {
     });
     
     if (missing.length > 0) {
+      console.log('Validation failed - missing fields:', missing);
       return res.status(400).json({
         success: false,
         error: 'Missing required fields',
         missing,
         received: Object.keys(applicationData),
+        receivedValues: applicationData, // For debugging
         method: processingMethod,
         duration: Date.now() - startTime
       });
@@ -249,7 +285,7 @@ functions.http('submitInternshipApplication', async (req, res) => {
               metadata: {
                 contentType: file.mimetype,
               },
-              resumable: false // Use simple upload for small files
+              resumable: false // Use simple upload for files under 5MB
             });
             
             uploadedFiles.push({
@@ -264,6 +300,7 @@ functions.http('submitInternshipApplication', async (req, res) => {
             
           } catch (uploadError) {
             console.error(`Upload failed for ${file.filename}:`, uploadError);
+            // Continue with other files
           }
         }
         
@@ -300,6 +337,7 @@ functions.http('submitInternshipApplication', async (req, res) => {
   } catch (error) {
     const duration = Date.now() - startTime;
     console.error('Function error:', error);
+    console.error('Error stack:', error.stack);
     
     res.status(500).json({
       success: false,
