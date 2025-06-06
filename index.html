@@ -520,7 +520,7 @@
                 formData.append('submittedAt', new Date().toISOString());
                 
                 // Replace with your actual Cloud Function URL
-                const CLOUD_FUNCTION_URL = 'https://us-central1-your-internship-app.cloudfunctions.net/submitInternshipApplication';
+                const CLOUD_FUNCTION_URL = 'https://YOUR_REGION-YOUR_PROJECT_ID.cloudfunctions.net/submitInternshipApplication';
                 
                 const response = await fetch(CLOUD_FUNCTION_URL, {
                     method: 'POST',
