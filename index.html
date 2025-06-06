@@ -468,7 +468,7 @@
             });
         });
 
-        // Smart form submission with fallback
+        // Robust form submission with clear fallback
         document.getElementById('internshipForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -491,49 +491,70 @@
             }
             
             const submitBtn = document.querySelector('.submit-btn');
+            const originalText = submitBtn.textContent;
             submitBtn.textContent = '📨 Submitting...';
             submitBtn.style.background = '#6b7280';
             submitBtn.disabled = true;
             
-            // Check if there are files
+            // Check for files
             const fileInputs = this.querySelectorAll('input[type="file"]');
             const hasFiles = Array.from(fileInputs).some(input => input.files.length > 0);
             
             const CLOUD_FUNCTION_URL = 'https://us-central1-your-internship-app.cloudfunctions.net/submitInternshipApplication';
             
-            if (hasFiles) {
-                // Try multipart first for files
-                try {
-                    console.log('Attempting multipart submission with files...');
-                    const result = await submitWithFiles(CLOUD_FUNCTION_URL, this);
-                    handleSuccess(result, submitBtn, hasFiles);
-                    return;
-                } catch (error) {
-                    console.warn('Multipart submission failed:', error.message);
-                    
-                    // Ask user if they want to continue without files
-                    const continueWithoutFiles = confirm(
-                        `File upload failed: ${error.message}\n\n` +
-                        'Would you like to submit your application without files? ' +
-                        'You can upload files separately later.'
-                    );
-                    
-                    if (!continueWithoutFiles) {
-                        resetSubmitButton(submitBtn);
-                        return;
-                    }
-                }
-            }
-            
-            // Submit without files (JSON approach)
             try {
-                console.log('Submitting as JSON (no files)...');
-                const result = await submitAsJson(CLOUD_FUNCTION_URL, this);
-                handleSuccess(result, submitBtn, false);
+                let result;
+                
+                if (hasFiles) {
+                    // Try multipart with very short timeout
+                    console.log('Attempting multipart submission...');
+                    submitBtn.textContent = '📎 Uploading files...';
+                    
+                    try {
+                        result = await Promise.race([
+                            submitWithFiles(CLOUD_FUNCTION_URL, this),
+                            new Promise((_, reject) => 
+                                setTimeout(() => reject(new Error('File upload timeout')), 10000)
+                            )
+                        ]);
+                        
+                        console.log('✅ Multipart submission successful');
+                        
+                    } catch (fileError) {
+                        console.warn('❌ File upload failed:', fileError.message);
+                        
+                        // Ask user about fallback
+                        const useJSON = confirm(
+                            `File upload failed: ${fileError.message}\n\n` +
+                            'Would you like to submit your application without files?\n' +
+                            'You can upload files separately later.\n\n' +
+                            'Click OK to submit without files, or Cancel to try again.'
+                        );
+                        
+                        if (!useJSON) {
+                            resetSubmitButton(submitBtn, originalText);
+                            return;
+                        }
+                        
+                        // Fall back to JSON
+                        console.log('Falling back to JSON submission...');
+                        submitBtn.textContent = '📝 Submitting form...';
+                        result = await submitAsJSON(CLOUD_FUNCTION_URL, this);
+                        result.fileUploadFailed = true;
+                    }
+                } else {
+                    // No files - use fast JSON
+                    console.log('No files - using JSON submission');
+                    result = await submitAsJSON(CLOUD_FUNCTION_URL, this);
+                }
+                
+                // Success!
+                handleSuccess(result, submitBtn);
+                
             } catch (error) {
-                console.error('JSON submission failed:', error);
-                alert('❌ Submission failed: ' + error.message);
-                resetSubmitButton(submitBtn);
+                console.error('Submission failed:', error);
+                alert('❌ Application submission failed: ' + error.message);
+                resetSubmitButton(submitBtn, originalText);
             }
         });
 
@@ -546,6 +567,7 @@
                 if (element.name && element.type !== 'submit') {
                     if (element.type === 'file') {
                         for (let file of element.files) {
+                            console.log(`Adding file: ${file.name} (${file.size} bytes)`);
                             formData.append(element.name, file);
                         }
                     } else if (element.type === 'checkbox') {
@@ -555,8 +577,6 @@
                     }
                 }
             }
-            
-            formData.append('submittedAt', new Date().toISOString());
             
             const response = await fetch(url, {
                 method: 'POST',
@@ -571,10 +591,11 @@
             return await response.json();
         }
 
-        async function submitAsJson(url, form) {
+        async function submitAsJSON(url, form) {
             const formData = {};
             const formElements = form.elements;
             
+            // Collect non-file fields
             for (let element of formElements) {
                 if (element.name && element.type !== 'submit' && element.type !== 'file') {
                     if (element.type === 'checkbox') {
@@ -584,8 +605,6 @@
                     }
                 }
             }
-            
-            formData.submittedAt = new Date().toISOString();
             
             const response = await fetch(url, {
                 method: 'POST',
@@ -603,7 +622,7 @@
             return await response.json();
         }
 
-        function handleSuccess(result, submitBtn, hadFiles) {
+        function handleSuccess(result, submitBtn) {
             let message = `🎉 Application submitted successfully!\n\nApplication ID: ${result.applicationId}`;
             
             if (result.filesReceived > 0) {
@@ -611,8 +630,8 @@
                 if (result.fileNames && result.fileNames.length > 0) {
                     message += `\n📄 Files: ${result.fileNames.join(', ')}`;
                 }
-            } else if (hadFiles) {
-                message += '\n📎 Note: Files were not uploaded due to technical issues, but your application was saved.';
+            } else if (result.fileUploadFailed) {
+                message += '\n\n📎 Note: Files were not uploaded, but your application was saved successfully.';
             }
             
             if (result.duration) {
@@ -623,10 +642,13 @@
             
             submitBtn.textContent = '✅ Application Submitted';
             submitBtn.style.background = '#10b981';
+            
+            // Optional: Reset form after success
+            // document.getElementById('internshipForm').reset();
         }
 
-        function resetSubmitButton(submitBtn) {
-            submitBtn.textContent = '🚀 Submit Application';
+        function resetSubmitButton(submitBtn, originalText) {
+            submitBtn.textContent = originalText || '🚀 Submit Application';
             submitBtn.style.background = 'linear-gradient(135deg, #4f46e5, #7c3aed)';
             submitBtn.disabled = false;
         }
