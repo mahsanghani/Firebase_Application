@@ -1,591 +1,311 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Internship Application Form</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+const functions = require('@google-cloud/functions-framework');
+const { Firestore } = require('@google-cloud/firestore');
+const { Storage } = require('@google-cloud/storage');
+const multer = require('multer');
 
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
+// Initialize services
+const firestore = new Firestore();
+const storage = new Storage();
+const BUCKET_NAME = 'internship-applications-files';
 
-        .form-container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-            overflow: hidden;
-            animation: slideUp 0.6s ease-out;
-        }
+// Validation rules
+const REQUIRED_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'university', 'major', 'graduationDate', 'position', 'availability', 'motivation', 'terms'];
 
-        @keyframes slideUp {
-            from {
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
+// Configure multer with better error handling
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
+    files: 5,
+    fieldSize: 1024 * 1024, // 1MB for form fields
+    parts: 20 // Max form parts
+  },
+  fileFilter: (req, file, cb) => {
+    console.log('Processing file:', file.originalname, file.mimetype);
+    cb(null, true);
+  }
+});
 
-        .form-header {
-            background: linear-gradient(135deg, #4f46e5, #7c3aed);
-            color: white;
-            padding: 40px 30px;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
-        }
+const uploadFields = upload.fields([
+  { name: 'resume', maxCount: 1 },
+  { name: 'coverLetter', maxCount: 1 },
+  { name: 'portfolio', maxCount: 3 }
+]);
 
-        .form-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-            animation: rotate 20s linear infinite;
-        }
-
-        @keyframes rotate {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .form-header h1 {
-            font-size: 2.5rem;
-            margin-bottom: 10px;
-            position: relative;
-            z-index: 1;
-        }
-
-        .form-header p {
-            font-size: 1.1rem;
-            opacity: 0.9;
-            position: relative;
-            z-index: 1;
-        }
-
-        .form-content {
-            padding: 40px 30px;
-        }
-
-        .form-section {
-            margin-bottom: 30px;
-            opacity: 0;
-            animation: fadeInUp 0.6s ease-out forwards;
-        }
-
-        .form-section:nth-child(1) { animation-delay: 0.1s; }
-        .form-section:nth-child(2) { animation-delay: 0.2s; }
-        .form-section:nth-child(3) { animation-delay: 0.3s; }
-        .form-section:nth-child(4) { animation-delay: 0.4s; }
-        .form-section:nth-child(5) { animation-delay: 0.5s; }
-        .form-section:nth-child(6) { animation-delay: 0.6s; }
-
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .section-title {
-            font-size: 1.3rem;
-            color: #4f46e5;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #e5e7eb;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: #374151;
-            font-size: 0.95rem;
-        }
-
-        .required {
-            color: #ef4444;
-        }
-
-        input, select, textarea {
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e5e7eb;
-            border-radius: 10px;
-            font-size: 1rem;
-            transition: all 0.3s ease;
-            background: white;
-        }
-
-        input:focus, select:focus, textarea:focus {
-            outline: none;
-            border-color: #4f46e5;
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
-            transform: translateY(-1px);
-        }
-
-        textarea {
-            resize: vertical;
-            min-height: 120px;
-        }
-
-        .file-upload {
-            position: relative;
-            display: inline-block;
-            width: 100%;
-        }
-
-        .file-upload input[type="file"] {
-            position: absolute;
-            opacity: 0;
-            width: 100%;
-            height: 100%;
-            cursor: pointer;
-        }
-
-        .file-upload-label {
-            display: block;
-            padding: 12px 16px;
-            border: 2px dashed #d1d5db;
-            border-radius: 10px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            background: #f9fafb;
-        }
-
-        .file-upload-label:hover {
-            border-color: #4f46e5;
-            background: #f3f4f6;
-        }
-
-        .checkbox-group {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-top: 10px;
-        }
-
-        .checkbox-group input[type="checkbox"] {
-            width: auto;
-            margin: 0;
-        }
-
-        .submit-btn {
-            background: linear-gradient(135deg, #4f46e5, #7c3aed);
-            color: white;
-            padding: 16px 40px;
-            border: none;
-            border-radius: 50px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
-            width: 100%;
-            margin-top: 20px;
-        }
-
-        .submit-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(79, 70, 229, 0.4);
-        }
-
-        .submit-btn:active {
-            transform: translateY(0);
-        }
-
-        @media (max-width: 768px) {
-            .form-row {
-                grid-template-columns: 1fr;
-            }
-            
-            .form-header h1 {
-                font-size: 2rem;
-            }
-            
-            .form-content {
-                padding: 30px 20px;
-            }
-        }
-
-        .icon {
-            font-size: 1.2rem;
-        }
-    </style>
-</head>
-<body>
-    <div class="form-container">
-        <div class="form-header">
-            <h1>🚀 Internship Application</h1>
-            <p>Join our team and kickstart your career journey</p>
-        </div>
-
-        <form class="form-content" id="internshipForm">
-            <div class="form-section">
-                <h2 class="section-title">
-                    <span class="icon">👤</span>
-                    Personal Information
-                </h2>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="firstName">First Name <span class="required">*</span></label>
-                        <input type="text" id="firstName" name="firstName" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="lastName">Last Name <span class="required">*</span></label>
-                        <input type="text" id="lastName" name="lastName" required>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="email">Email Address <span class="required">*</span></label>
-                        <input type="email" id="email" name="email" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="phone">Phone Number <span class="required">*</span></label>
-                        <input type="tel" id="phone" name="phone" required>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label for="address">Address</label>
-                    <textarea id="address" name="address" rows="3"></textarea>
-                </div>
-            </div>
-
-            <div class="form-section">
-                <h2 class="section-title">
-                    <span class="icon">🎓</span>
-                    Educational Background
-                </h2>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="university">University/College <span class="required">*</span></label>
-                        <input type="text" id="university" name="university" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="major">Major/Field of Study <span class="required">*</span></label>
-                        <input type="text" id="major" name="major" required>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="graduationDate">Expected Graduation Date <span class="required">*</span></label>
-                        <input type="month" id="graduationDate" name="graduationDate" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="gpa">Current GPA</label>
-                        <input type="number" id="gpa" name="gpa" min="0" max="4" step="0.1">
-                    </div>
-                </div>
-            </div>
-
-            <div class="form-section">
-                <h2 class="section-title">
-                    <span class="icon">💼</span>
-                    Internship Details
-                </h2>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="position">Preferred Position <span class="required">*</span></label>
-                        <select id="position" name="position" required>
-                            <option value="">Select a position</option>
-                            <option value="software-engineering">Software Engineering</option>
-                            <option value="data-science">Data Science</option>
-                            <option value="marketing">Marketing</option>
-                            <option value="finance">Finance</option>
-                            <option value="hr">Human Resources</option>
-                            <option value="design">Design</option>
-                            <option value="business-analysis">Business Analysis</option>
-                            <option value="other">Other</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="availability">Availability <span class="required">*</span></label>
-                        <select id="availability" name="availability" required>
-                            <option value="">Select availability</option>
-                            <option value="summer">Summer 2025</option>
-                            <option value="fall">Fall 2025</option>
-                            <option value="spring">Spring 2026</option>
-                            <option value="year-round">Year-round</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="duration">Preferred Duration (weeks)</label>
-                        <input type="number" id="duration" name="duration" min="4" max="52">
-                    </div>
-                    <div class="form-group">
-                        <label for="workType">Work Preference</label>
-                        <select id="workType" name="workType">
-                            <option value="remote">Remote</option>
-                            <option value="onsite">On-site</option>
-                            <option value="hybrid">Hybrid</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <div class="form-section">
-                <h2 class="section-title">
-                    <span class="icon">⚡</span>
-                    Skills & Experience
-                </h2>
-                <div class="form-group">
-                    <label for="skills">Technical Skills</label>
-                    <textarea id="skills" name="skills" placeholder="List your technical skills, programming languages, software, etc."></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="experience">Relevant Experience</label>
-                    <textarea id="experience" name="experience" placeholder="Describe any relevant work experience, projects, or internships"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="projects">Notable Projects</label>
-                    <textarea id="projects" name="projects" placeholder="Describe 1-2 significant projects you've worked on"></textarea>
-                </div>
-            </div>
-
-            <div class="form-section">
-                <h2 class="section-title">
-                    <span class="icon">💭</span>
-                    Additional Information
-                </h2>
-                <div class="form-group">
-                    <label for="motivation">Why are you interested in this internship? <span class="required">*</span></label>
-                    <textarea id="motivation" name="motivation" required placeholder="Tell us why you want to intern with our company"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="goals">What do you hope to achieve during this internship?</label>
-                    <textarea id="goals" name="goals" placeholder="Describe your learning goals and what you hope to accomplish"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="additionalInfo">Additional Comments</label>
-                    <textarea id="additionalInfo" name="additionalInfo" placeholder="Anything else you'd like us to know?"></textarea>
-                </div>
-            </div>
-
-            <div class="form-section">
-                <h2 class="section-title">
-                    <span class="icon">📎</span>
-                    Documents
-                </h2>
-                <div class="form-group">
-                    <label for="resume">Resume/CV <span class="required">*</span></label>
-                    <div class="file-upload">
-                        <input type="file" id="resume" name="resume" accept=".pdf,.doc,.docx" required>
-                        <label for="resume" class="file-upload-label">
-                            📄 Click to upload your resume (PDF, DOC, DOCX)
-                        </label>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label for="coverLetter">Cover Letter</label>
-                    <div class="file-upload">
-                        <input type="file" id="coverLetter" name="coverLetter" accept=".pdf,.doc,.docx">
-                        <label for="coverLetter" class="file-upload-label">
-                            📝 Click to upload your cover letter (Optional)
-                        </label>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label for="portfolio">Portfolio/Additional Documents</label>
-                    <div class="file-upload">
-                        <input type="file" id="portfolio" name="portfolio" accept=".pdf,.doc,.docx,.zip" multiple>
-                        <label for="portfolio" class="file-upload-label">
-                            🎨 Click to upload portfolio or additional documents (Optional)
-                        </label>
-                    </div>
-                </div>
-            </div>
-
-            <div class="form-section">
-                <div class="checkbox-group">
-                    <input type="checkbox" id="terms" name="terms" required>
-                    <label for="terms">I agree to the terms and conditions and privacy policy <span class="required">*</span></label>
-                </div>
-                <div class="checkbox-group">
-                    <input type="checkbox" id="newsletter" name="newsletter">
-                    <label for="newsletter">I would like to receive updates about internship opportunities</label>
-                </div>
-            </div>
-
-            <button type="submit" class="submit-btn">
-                🚀 Submit Application
-            </button>
-        </form>
-    </div>
-
-    <script>
-        // File upload feedback
-        document.querySelectorAll('input[type="file"]').forEach(input => {
-            input.addEventListener('change', function() {
-                const label = this.nextElementSibling;
-                const fileCount = this.files.length;
-                if (fileCount > 0) {
-                    if (fileCount === 1) {
-                        label.textContent = `✅ ${this.files[0].name}`;
-                    } else {
-                        label.textContent = `✅ ${fileCount} files selected`;
-                    }
-                    label.style.background = '#ecfdf5';
-                    label.style.borderColor = '#10b981';
-                    label.style.color = '#047857';
-                }
-            });
+// Promisified multer wrapper with better error handling
+function handleMultipart(req, res) {
+  return new Promise((resolve, reject) => {
+    uploadFields(req, res, (err) => {
+      if (err) {
+        console.error('Multer error details:', {
+          message: err.message,
+          code: err.code,
+          field: err.field,
+          stack: err.stack
         });
+        
+        // Handle specific multer errors
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          reject(new Error('File too large (max 10MB)'));
+        } else if (err.code === 'LIMIT_FILE_COUNT') {
+          reject(new Error('Too many files'));
+        } else if (err.message.includes('Unexpected end of form')) {
+          reject(new Error('Form data incomplete - try refreshing and submitting again'));
+        } else {
+          reject(new Error(`File upload error: ${err.message}`));
+        }
+      } else {
+        console.log('Multer processing successful');
+        resolve();
+      }
+    });
+  });
+}
 
-        // Form submission to GCP (Fast multipart with files)
-        document.getElementById('internshipForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
+functions.http('submitInternshipApplication', async (req, res) => {
+  const startTime = Date.now();
+  
+  // CORS headers
+  res.set({
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Cache-Control': 'no-cache'
+  });
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, error: 'Method not allowed' });
+  }
+
+  try {
+    console.log('Processing request...');
+    console.log('Content-Type:', req.headers['content-type']);
+    console.log('Content-Length:', req.headers['content-length']);
+
+    let applicationData = {};
+    let files = [];
+    let processingMethod = 'unknown';
+
+    // Detect content type and handle accordingly
+    const contentType = req.headers['content-type'] || '';
+    
+    if (contentType.includes('multipart/form-data')) {
+      processingMethod = 'multipart';
+      console.log('Attempting multipart processing...');
+      
+      try {
+        // Try multipart processing with timeout
+        await Promise.race([
+          handleMultipart(req, res),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Multipart processing timeout')), 5000)
+          )
+        ]);
+        
+        applicationData = req.body || {};
+        console.log('Multipart fields received:', Object.keys(applicationData));
+        
+        // Extract files
+        if (req.files) {
+          console.log('Files detected:', Object.keys(req.files));
+          for (const [fieldName, fileList] of Object.entries(req.files)) {
+            for (const file of fileList) {
+              files.push({
+                fieldname: fieldName,
+                filename: file.originalname,
+                buffer: file.buffer,
+                mimetype: file.mimetype,
+                size: file.size
+              });
+            }
+          }
+        }
+        
+        console.log(`Multipart processing successful: ${Object.keys(applicationData).length} fields, ${files.length} files`);
+        
+      } catch (multipartError) {
+        console.error('Multipart processing failed:', multipartError.message);
+        
+        // Fallback: ask client to retry with JSON
+        return res.status(400).json({
+          success: false,
+          error: 'Multipart form error',
+          message: multipartError.message,
+          suggestion: 'Please try submitting without files first, then upload files separately',
+          duration: Date.now() - startTime
+        });
+      }
+      
+    } else if (contentType.includes('application/json')) {
+      processingMethod = 'json';
+      console.log('Processing JSON data');
+      applicationData = req.body || {};
+      
+    } else {
+      processingMethod = 'urlencoded';
+      console.log('Processing URL-encoded data');
+      applicationData = req.body || {};
+    }
+
+    console.log(`Processing method: ${processingMethod}`);
+    console.log('Final data - Fields:', Object.keys(applicationData).length, 'Files:', files.length);
+
+    // Validate required fields
+    const missing = REQUIRED_FIELDS.filter(field => {
+      if (field === 'terms') return applicationData[field] !== 'true' && applicationData[field] !== true;
+      return !applicationData[field] || applicationData[field].toString().trim() === '';
+    });
+    
+    if (missing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        missing,
+        received: Object.keys(applicationData),
+        method: processingMethod,
+        duration: Date.now() - startTime
+      });
+    }
+
+    // Generate application ID
+    const applicationId = `APP_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    
+    // Prepare document structure
+    const doc = {
+      id: applicationId,
+      personal: {
+        firstName: applicationData.firstName,
+        lastName: applicationData.lastName,
+        email: applicationData.email,
+        phone: applicationData.phone,
+        address: applicationData.address || ''
+      },
+      education: {
+        university: applicationData.university,
+        major: applicationData.major,
+        graduation: applicationData.graduationDate,
+        gpa: applicationData.gpa ? parseFloat(applicationData.gpa) : null
+      },
+      internship: {
+        position: applicationData.position,
+        availability: applicationData.availability,
+        duration: applicationData.duration ? parseInt(applicationData.duration) : null,
+        workType: applicationData.workType || 'remote'
+      },
+      content: {
+        motivation: applicationData.motivation,
+        skills: applicationData.skills || '',
+        experience: applicationData.experience || '',
+        projects: applicationData.projects || '',
+        goals: applicationData.goals || '',
+        additional: applicationData.additionalInfo || ''
+      },
+      files: [],
+      meta: {
+        submitted: new Date(),
+        terms: true,
+        newsletter: applicationData.newsletter === 'true' || applicationData.newsletter === true,
+        ip: req.ip || 'unknown',
+        agent: req.get('User-Agent')?.substr(0, 100) || 'unknown',
+        processingMethod,
+        fileCount: files.length
+      }
+    };
+
+    // Respond immediately
+    const responseTime = Date.now() - startTime;
+    console.log(`Sending response after ${responseTime}ms`);
+    
+    res.status(200).json({
+      success: true,
+      applicationId,
+      message: files.length > 0 ? 'Application received, processing files...' : 'Application submitted successfully',
+      filesReceived: files.length,
+      fileNames: files.map(f => f.filename),
+      processingMethod,
+      duration: responseTime
+    });
+
+    // Background processing
+    console.log('Starting background processing...');
+    
+    try {
+      const uploadedFiles = [];
+      
+      // Process files if any
+      if (files.length > 0) {
+        console.log(`Processing ${files.length} files in background...`);
+        
+        for (const file of files) {
+          try {
+            const destination = `applications/${applicationId}/${file.filename}`;
+            const gcsFile = storage.bucket(BUCKET_NAME).file(destination);
             
-            // Basic validation
-            const requiredFields = this.querySelectorAll('[required]');
-            let allValid = true;
-            
-            requiredFields.forEach(field => {
-                if (!field.value.trim() && field.type !== 'file') {
-                    field.style.borderColor = '#ef4444';
-                    allValid = false;
-                } else {
-                    field.style.borderColor = '#10b981';
-                }
+            await gcsFile.save(file.buffer, {
+              metadata: {
+                contentType: file.mimetype,
+              },
+              resumable: false // Use simple upload for small files
             });
             
-            if (!allValid) {
-                alert('⚠️ Please fill in all required fields.');
-                return;
-            }
-            
-            const submitBtn = document.querySelector('.submit-btn');
-            submitBtn.textContent = '📨 Submitting...';
-            submitBtn.style.background = '#6b7280';
-            submitBtn.disabled = true;
-            
-            try {
-                // Prepare form data with files
-                const formData = new FormData();
-                
-                // Add all form fields
-                const formElements = this.elements;
-                for (let element of formElements) {
-                    if (element.name && element.type !== 'submit') {
-                        if (element.type === 'file') {
-                            // Handle file uploads
-                            for (let file of element.files) {
-                                formData.append(element.name, file);
-                            }
-                        } else if (element.type === 'checkbox') {
-                            formData.append(element.name, element.checked);
-                        } else {
-                            formData.append(element.name, element.value);
-                        }
-                    }
-                }
-                
-                // Add submission timestamp
-                formData.append('submittedAt', new Date().toISOString());
-                
-                // Replace with your actual Cloud Function URL
-                const CLOUD_FUNCTION_URL = 'https://us-central1-your-internship-app.cloudfunctions.net/submitInternshipApplication';
-                
-                // Start timer
-                const startTime = Date.now();
-                
-                const response = await fetch(CLOUD_FUNCTION_URL, {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const duration = Date.now() - startTime;
-                console.log(`Request completed in ${duration}ms`);
-                
-                if (response.ok) {
-                    const result = await response.json();
-                    
-                    let message = `🎉 Application submitted successfully!\n\nApplication ID: ${result.applicationId}`;
-                    
-                    if (result.filesReceived > 0) {
-                        message += `\n📎 Files uploaded: ${result.filesReceived}`;
-                        if (result.fileNames) {
-                            message += `\n📄 Files: ${result.fileNames.join(', ')}`;
-                        }
-                    }
-                    
-                    message += `\n⚡ Processed in ${result.duration || duration}ms`;
-                    
-                    alert(message);
-                    
-                    submitBtn.textContent = '✅ Application Submitted';
-                    submitBtn.style.background = '#10b981';
-                    
-                    // Optionally reset form
-                    // this.reset();
-                } else {
-                    const errorData = await response.json();
-                    throw new Error(errorData.message || 'Submission failed');
-                }
-                
-            } catch (error) {
-                console.error('Error submitting form:', error);
-                alert('❌ There was an error submitting your application: ' + error.message);
-                submitBtn.textContent = '🚀 Submit Application';
-                submitBtn.style.background = 'linear-gradient(135deg, #4f46e5, #7c3aed)';
-                submitBtn.disabled = false;
-            }
-        });
-
-        // Smooth animations on scroll
-        const observerOptions = {
-            threshold: 0.1,
-            rootMargin: '0px 0px -50px 0px'
-        };
-
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.style.opacity = '1';
-                    entry.target.style.transform = 'translateY(0)';
-                }
+            uploadedFiles.push({
+              fieldname: file.fieldname,
+              filename: file.filename,
+              gcsPath: `gs://${BUCKET_NAME}/${destination}`,
+              publicUrl: `https://storage.googleapis.com/${BUCKET_NAME}/${destination}`,
+              size: file.size
             });
-        }, observerOptions);
+            
+            console.log(`Uploaded: ${file.filename} (${file.size} bytes)`);
+            
+          } catch (uploadError) {
+            console.error(`Upload failed for ${file.filename}:`, uploadError);
+          }
+        }
+        
+        console.log(`File processing complete: ${uploadedFiles.length}/${files.length} successful`);
+      }
 
-        document.querySelectorAll('.form-section').forEach(section => {
-            observer.observe(section);
+      // Update document with files
+      doc.files = uploadedFiles;
+      
+      // Save to Firestore
+      await firestore.collection('applications').doc(applicationId).set(doc);
+      console.log(`Database save completed for ${applicationId}`);
+      
+    } catch (backgroundError) {
+      console.error('Background processing error:', backgroundError);
+      
+      // Fallback save without files
+      try {
+        await firestore.collection('applications').doc(applicationId).set({
+          ...doc,
+          files: [],
+          meta: {
+            ...doc.meta,
+            processingError: backgroundError.message,
+            fallbackSave: true
+          }
         });
-    </script>
-</body>
-</html>
+        console.log(`Fallback save completed for ${applicationId}`);
+      } catch (fallbackError) {
+        console.error('Fallback save failed:', fallbackError);
+      }
+    }
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error('Function error:', error);
+    
+    res.status(500).json({
+      success: false,
+      error: 'Processing failed',
+      message: error.message,
+      duration
+    });
+  }
+});
