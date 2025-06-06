@@ -468,7 +468,7 @@
             });
         });
 
-        // Form submission to GCP
+        // Form submission to GCP (JSON approach)
         document.getElementById('internshipForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -496,35 +496,40 @@
             submitBtn.disabled = true;
             
             try {
-                // Prepare form data
-                const formData = new FormData();
-                
-                // Add all form fields
+                // Collect form data as JSON (simpler approach)
+                const formData = {};
                 const formElements = this.elements;
+                
                 for (let element of formElements) {
-                    if (element.name && element.type !== 'submit') {
-                        if (element.type === 'file') {
-                            // Handle file uploads
-                            for (let file of element.files) {
-                                formData.append(element.name, file);
-                            }
-                        } else if (element.type === 'checkbox') {
-                            formData.append(element.name, element.checked);
+                    if (element.name && element.type !== 'submit' && element.type !== 'file') {
+                        if (element.type === 'checkbox') {
+                            formData[element.name] = element.checked;
                         } else {
-                            formData.append(element.name, element.value);
+                            formData[element.name] = element.value;
                         }
                     }
                 }
                 
                 // Add submission timestamp
-                formData.append('submittedAt', new Date().toISOString());
+                formData.submittedAt = new Date().toISOString();
+                
+                // Note: Files would need separate handling
+                const fileInputs = this.querySelectorAll('input[type="file"]');
+                const hasFiles = Array.from(fileInputs).some(input => input.files.length > 0);
+                
+                if (hasFiles) {
+                    alert('📎 File uploads coming soon! For now, submitting application without files.');
+                }
                 
                 // Replace with your actual Cloud Function URL
-                const CLOUD_FUNCTION_URL = 'https://YOUR_REGION-YOUR_PROJECT_ID.cloudfunctions.net/submitInternshipApplication';
+                const CLOUD_FUNCTION_URL = 'https://us-central1-your-internship-app.cloudfunctions.net/submitInternshipApplication';
                 
                 const response = await fetch(CLOUD_FUNCTION_URL, {
                     method: 'POST',
-                    body: formData
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
                 });
                 
                 if (response.ok) {
@@ -532,16 +537,14 @@
                     alert('🎉 Application submitted successfully! Application ID: ' + result.applicationId);
                     submitBtn.textContent = '✅ Application Submitted';
                     submitBtn.style.background = '#10b981';
-                    
-                    // Optionally reset form
-                    // this.reset();
                 } else {
-                    throw new Error('Submission failed');
+                    const errorData = await response.json();
+                    throw new Error(errorData.message || 'Submission failed');
                 }
                 
             } catch (error) {
                 console.error('Error submitting form:', error);
-                alert('❌ There was an error submitting your application. Please try again.');
+                alert('❌ There was an error submitting your application: ' + error.message);
                 submitBtn.textContent = '🚀 Submit Application';
                 submitBtn.style.background = 'linear-gradient(135deg, #4f46e5, #7c3aed)';
                 submitBtn.disabled = false;
